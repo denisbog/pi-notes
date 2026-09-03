@@ -1,0 +1,17 @@
+[package]
+name = "pi-notes"
+version.workspace = true
+edition.workspace = true
+description = "View the last pi message + thinking block as markdown and store/browse notes"
+license.workspace = true
+
+[dependencies]
+# Built against iced 0.14 (crates.io). Only the lightweight tiny-skia software
+# renderer is enabled to keep compile times low; x11 + wayland are required on
+# Linux so the windowing backend (softbuffer) can pick a display.
+iced = { version="0.14", default-features = false, features = ["tiny-skia", "markdown", "thread-pool", "x11", "wayland"] }
+
+serde_json = "1"
+chrono = "0.4"
+dirs = "5"
+regex = "1"

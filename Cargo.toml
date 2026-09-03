@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "pi-notes",               # GUI: view pi message/thinking + browse/store notes
+    "pi-session-inspector",   # CLI: per-session token/cost HTML usage reports
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
