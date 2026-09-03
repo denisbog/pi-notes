@@ -4,7 +4,7 @@
 //! ┌──────────────────────────────────────────────────────────┐
 //! │ toolbar: pi-notes · project dir · [Refresh] [Save note]  │
 //! ├───────────────┬──────────────────────────────────────────┤
-//! │ notes tree    │ tabs [Message|Thinking]  · source label │
+//! │ notes tree    │ tabs [Message|Thinking]  · source label  │
 //! │ (left pane)   │──────────────────────────────────────────┤
 //! │               │ markdown viewer (tables + symbols)       │
 //! ├───────────────┴──────────────────────────────────────────┤
@@ -578,8 +578,10 @@ impl App {
             .width(Length::Fixed(260.0))
             .padding(6);
 
+        // Saving requires a loaded session; without one there is nothing to
+        // save, so the button is disabled.
         let save = button(text("Save note"))
-            .on_press(Message::SaveNote)
+            .on_press_maybe(self.session.as_ref().map(|_| Message::SaveNote))
             .padding([6, 14])
             .style(button::primary);
         let refresh = button(text("Refresh"))
@@ -597,9 +599,9 @@ impl App {
     fn tree_pane(&self) -> Element<'_, Message> {
         let header = container(
             text("Stored notes")
+.font(iced::Font::MONOSPACE)
                 .size(14)
-                .font(iced::Font::MONOSPACE)
-                .color(self.theme.extended_palette().secondary.strong.text),
+                ,
         )
         .padding([8, 8]);
 
@@ -652,10 +654,14 @@ impl App {
         container(
             column![
                 header,
-                row![filter_input, clear_filter].spacing(4),
+                container(
+                    row![filter_input, clear_filter]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center),
+                ),
                 filter_error,
                 scrollable(col).height(Length::Fill)
-            ]
+            ].padding(10)
             .spacing(6),
         )
         .width(Length::Fill)
@@ -717,7 +723,7 @@ impl App {
                     text(&self.source_label)
                         .size(11)
                         .color(self.theme.extended_palette().secondary.weak.text)
-                ]
+                ].padding(10)
                 .spacing(10)
                 .align_y(iced::Alignment::Center)
         } else {
@@ -727,7 +733,7 @@ impl App {
                 text(&self.source_label)
                     .size(11)
                     .color(self.theme.extended_palette().secondary.weak.text)
-            ]
+            ].padding(10)
             .align_y(iced::Alignment::Center)
         };
 
