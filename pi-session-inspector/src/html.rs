@@ -539,10 +539,13 @@ html {{ scroll-behavior:smooth; }}
     return c;
   }}
 
-  function cacheLossTimeline(reqs, focusFn) {{
+  function cacheLossTimeline(sess, reqs, focusFn) {{
     var losses = [];
     var prevCr = null;
     var prevT = null;
+    // Cost per lost token derived from the session totals, so each loss event can
+    // be priced at the same effective input-vs-cache-read rate used for the total.
+    var lossCostRate = (sess.lostCost && sess.lostTokens) ? sess.lostCost / sess.lostTokens : 0;
     for (var i = 0; i < reqs.length; i++) {{
       var r = reqs[i];
       var gap = null;
@@ -551,21 +554,21 @@ html {{ scroll-behavior:smooth; }}
       var dropPct = null;
       if (prevCr !== null && prevCr > 0) dropPct = (prevCr - r.cacheRead) / prevCr * 100;
       if (r.invalidated && dropPct !== null && dropPct > 0.01) {{
-        losses.push({{i:i, r:r, gap:gap, prevCr:prevCr, dropPct:dropPct}});
+        losses.push({{i:i, r:r, gap:gap, prevCr:prevCr, dropPct:dropPct, cost: r.lost * lossCostRate}});
       }}
       prevCr = r.cacheRead;
       prevT = t;
     }}
     if (!losses.length) return null;
     var box = document.createElement('div'); box.className='problems';
-    box.innerHTML = '<h3>Cache-loss timeline ('+losses.length+')</h3><ul></ul>';
+    box.innerHTML = '<h3>Cache-loss timeline ('+losses.length+' · '+fmtCost(sess.lostCost||0)+')</h3><ul></ul>';
     var ul = box.querySelector('ul');
     losses.forEach(function(l) {{
       var li = document.createElement('li');
       li.innerHTML = '<a href="#" data-focus="'+l.i+'" class="tagd">#'+l.r.idx+'</a> '+
         '<span class="dim">'+esc(l.r.time)+' · gap '+(l.gap!=null?l.gap.toFixed(0)+'s':'-')+
         ' · cache '+fmt(l.prevCr)+' → '+fmt(l.r.cacheRead)+' ('+(l.dropPct.toFixed(0))+')%'+
-        ' · re-sent <b>'+fmt(l.r.input)+'</b> tokens</span>';
+        ' · re-sent <b>'+fmt(l.r.input)+'</b> tokens · cost <b class="tagd">'+fmtCost(l.cost)+'</b></span>';
       ul.appendChild(li);
     }});
     box.addEventListener('click', function(ev){{
@@ -595,6 +598,7 @@ html {{ scroll-behavior:smooth; }}
     appendStat(stats,'large input',''+largeCount, largeCount?'warn':'');
     appendStat(stats,'cache lost events',''+(sess.invalidations||0), (sess.invalidations?'danger':''));
     appendStat(stats,'tokens lost',fmt(sess.lostTokens||0), (sess.lostTokens?'warn':''));
+    appendStat(stats,'cost of lost tokens',fmtCost(sess.lostCost||0), (sess.lostCost?'danger':''));
     appendStat(stats,'context at end',fmt(sess.contextEnd||0));
     appendStat(stats,'cost',fmtCost(sess.cost));
     wrap.appendChild(stats);
@@ -625,7 +629,7 @@ html {{ scroll-behavior:smooth; }}
     }}
 
     var hist = histogram(sess, reqs, largeThresh, function(i){{ focusReq(idx, i); }});
-    var cl = cacheLossTimeline(reqs, function(i){{ focusReq(idx, i); }});
+    var cl = cacheLossTimeline(sess, reqs, function(i){{ focusReq(idx, i); }});
     if (cl) wrap.appendChild(cl);
     wrap.appendChild(hist);
 
@@ -654,7 +658,7 @@ html {{ scroll-behavior:smooth; }}
       a.href = '#sess-'+(i+1);
       a.innerHTML = '<b>'+esc(s.name||s.sessionId||('session '+(i+1)))+'</b> '+
         '<span class="dim">'+fmt(s.input)+' in | '+fmt(s.cached)+' cached | '+fmt(s.contextEnd||0)+' ctx-end | '+s.requests.length+' req'+
-        (s.invalidations ? ' | <span class="tagd">'+s.invalidations+' cache loss ('+fmt(s.lostTokens)+' tok)</span>' : '')+
+        (s.invalidations ? ' | <span class="tagd">'+s.invalidations+' cache loss ('+fmt(s.lostTokens)+' tok · '+fmtCost(s.lostCost||0)+')</span>' : '')+
         '</span>';
       idxBox.appendChild(a);
     }}
