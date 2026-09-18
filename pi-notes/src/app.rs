@@ -6,24 +6,29 @@
 //! ├───────────────┬──────────────────────────────────────────┤
 //! │ notes tree    │ tabs [Message|Thinking]  · source label  │
 //! │ (left pane)   │──────────────────────────────────────────┤
-//! │               │ markdown viewer (tables + symbols)       │
+//! │               │ pi-mdview renderer (matches pi's TUI)    │
 //! ├───────────────┴──────────────────────────────────────────┤
 //! │ status bar                                               │
 //! └──────────────────────────────────────────────────────────┘
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use iced::widget::pane_grid::{self, PaneGrid};
+use iced::widget::text::{LineHeight, Wrapping};
 use iced::widget::{
-    button, center, column, container, markdown, mouse_area, opaque, row, rule, scrollable,
-    stack, text, text_input, Space,
+    button, center, column, container, mouse_area, opaque, responsive, rich_text, row, rule,
+    scrollable, stack, text, text_input, Space,
 };
 use iced::{window, Color, Element, Length, Task, Theme};
 
+use pi_mdview::fonts;
+use pi_mdview::{Line as MdLine, RenderOptions, Renderer, Theme as MarkdownTheme};
+
 use crate::notes::{self, TreeNode};
 use crate::session;
-use crate::symbols;
 use crate::tree;
 
 /// Whether the (collapsible) thinking block is currently shown.
@@ -49,7 +54,7 @@ enum Message {
     Edited(Result<bool, String>),
     NodeClicked(PathBuf),
     TitleChanged(String),
-    LinkClicked(markdown::Uri),
+    LinkClicked(String),
     RenameNote,
     RenameChanged(String),
     RenameConfirm,
@@ -61,23 +66,14 @@ enum Message {
     FilterChanged(String),
 }
 
-/// Minimal markdown viewer: only link clicks are customised; everything else
-/// (headings, paragraphs, code blocks, lists, quotes, tables) uses defaults.
-struct LinkViewer;
-
-impl<'a> markdown::Viewer<'a, Message, iced::Theme, iced::Renderer> for LinkViewer {
-    fn on_link_click(url: markdown::Uri) -> Message {
-        Message::LinkClicked(url)
-    }
-}
-
 pub struct App {
     session: Option<session::Session>,
     cwd: String,
     thinking_state: ThinkingState,
 
-    message_content: markdown::Content,
-    thinking_content: markdown::Content,
+    /// Raw markdown of the current pi session's reply and thinking block.
+    message_source: String,
+    thinking_source: String,
     notes_root: PathBuf,
     tree_root: TreeNode,
     expanded: HashSet<PathBuf>,
@@ -92,27 +88,100 @@ pub struct App {
     filter_error: bool,
 
     viewing_note: bool,
-    note_content: Option<markdown::Content>,
-    note_md: Option<String>,
+    /// Raw markdown of the note currently open in the viewer.
+    note_source: Option<String>,
 
     title: String,
     status: String,
     source_label: String,
     theme: Theme,
 
+    /// pi-mdview's renderer (the engine behind the pi-mdview viewer) plus a
+    /// cache of rendered documents keyed by `(source hash, columns)`.
+    markdown: MarkdownRenderer,
+
     panes: pane_grid::State<Pane>,
+}
+
+/// Font/layout constants matching the pi-mdview viewer, so pi-notes renders on
+/// the same character grid as pi's TUI.
+const FONT_SIZE: f32 = 14.0;
+/// Advance width of JetBrains Mono, in ems (it is exactly 0.6).
+const MONOSPACE_ADVANCE: f32 = 0.6;
+/// Line height factor (same as the pi-mdview viewer).
+const LINE_HEIGHT_RATIO: f32 = 1.447;
+
+/// Number of markdown columns that fit in `width` logical pixels.
+fn columns_for_width(width: f32) -> usize {
+    let advance = (FONT_SIZE * MONOSPACE_ADVANCE).max(1.0);
+    ((width / advance).floor() as usize).clamp(20, 400)
+}
+
+/// Wraps pi-mdview's [`Renderer`] and memoises its output. iced re-runs a
+/// `responsive` closure on every layout pass, and pi's renderer (which runs
+/// `syntect` over code blocks) is far too expensive to redo each time.
+struct MarkdownRenderer {
+    renderer: Renderer,
+    theme: MarkdownTheme,
+    cache: RefCell<HashMap<(u64, usize), Vec<MdLine>>>,
+}
+
+impl MarkdownRenderer {
+    fn new() -> Self {
+        let theme = MarkdownTheme::pi_dark();
+        // Match the viewer: it applies padding and line height itself, and
+        // does not pad lines to the full width.
+        let renderer = Renderer::new(theme).options(RenderOptions {
+            padding_x: 0,
+            padding_y: 0,
+            pad_to_width: false,
+            render_latex: true,
+        });
+        Self {
+            renderer,
+            theme,
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn lines(&self, source: &str, columns: usize) -> Vec<MdLine> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        let key = (hasher.finish(), columns);
+
+        if let Some(lines) = self.cache.borrow().get(&key) {
+            return lines.clone();
+        }
+
+        let lines = self.renderer.render(source, columns);
+        let mut cache = self.cache.borrow_mut();
+        // A handful of recent widths is plenty; resizing would otherwise grow
+        // the cache without bound.
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(key, lines.clone());
+        lines
+    }
 }
 
 impl App {
     pub fn run() -> iced::Result {
-        iced::application(App::new, App::update, App::view)
+        // Register the terminal font pi renders with (JetBrains Mono) so the
+        // renderer's 0.6 em cell grid and box-drawing tables line up.
+        let mut application = iced::application(App::new, App::update, App::view)
             .theme(App::theme)
             .title("pi-notes")
+            .default_font(fonts::monospace())
             .window(window::Settings {
                 size: iced::Size::new(1180.0, 760.0),
                 ..Default::default()
-            })
-            .run()
+            });
+        for bytes in fonts::all() {
+            application = application.font(bytes);
+        }
+        application.run()
     }
 
     fn theme(&self) -> Theme {
@@ -127,8 +196,8 @@ impl App {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             thinking_state: ThinkingState::Expanded,
-            message_content: markdown::Content::new(),
-            thinking_content: markdown::Content::new(),
+            message_source: String::new(),
+            thinking_source: String::new(),
             notes_root,
             tree_root: TreeNode {
                 name: "notes".into(),
@@ -146,12 +215,12 @@ impl App {
             filter: String::new(),
             filter_error: false,
             viewing_note: false,
-            note_content: None,
-            note_md: None,
+            note_source: None,
             title: String::new(),
             status: String::new(),
             source_label: String::from("no session loaded"),
             theme: Theme::TokyoNight,
+            markdown: MarkdownRenderer::new(),
             panes: pane_grid::State::with_configuration(
                 pane_grid::Configuration::Split {
                     axis: pane_grid::Axis::Vertical,
@@ -188,10 +257,8 @@ impl App {
                         .cwd
                         .clone()
                         .unwrap_or_else(|| app.cwd.clone());
-                    let msg = symbols::to_unicode(&s.message);
-                    let th = symbols::to_unicode(&s.thinking);
-                    app.message_content = markdown::Content::parse(&msg);
-                    app.thinking_content = markdown::Content::parse(&th);
+                    app.message_source = s.message.clone();
+                    app.thinking_source = s.thinking.clone();
                     app.source_label = format!("session: {}", s.path.display());
                     let at = s
                         .leaf_id
@@ -241,10 +308,8 @@ impl App {
                             Ok(s) => {
                                 self.session = Some(s.clone());
                                 self.cwd = s.cwd.clone().unwrap_or_else(|| self.cwd.clone());
-                                self.message_content =
-                                    markdown::Content::parse(&symbols::to_unicode(&s.message));
-                                self.thinking_content =
-                                    markdown::Content::parse(&symbols::to_unicode(&s.thinking));
+                                self.message_source = s.message.clone();
+                                self.thinking_source = s.thinking.clone();
                                 let at = s
                                     .leaf_id
                                     .as_deref()
@@ -378,8 +443,7 @@ impl App {
                             self.renaming = false;
                             self.confirming_remove = false;
                             self.viewing_note = false;
-                            self.note_content = None;
-                            self.note_md = None;
+                            self.note_source = None;
                             self.selected_note = None;
                             self.source_label = String::from("no note selected");
                             self.status = format!("Removed note: {}", path.display());
@@ -439,9 +503,7 @@ impl App {
     fn load_note(&mut self, path: &std::path::Path) {
         match std::fs::read_to_string(path) {
             Ok(md) => {
-                let converted = symbols::to_unicode(&md);
-                self.note_md = Some(md);
-                self.note_content = Some(markdown::Content::parse(&converted));
+                self.note_source = Some(md);
                 self.selected_note = Some(path.to_path_buf());
                 self.viewing_note = true;
                 self.source_label = format!("note: {}", path.display());
@@ -751,8 +813,8 @@ impl App {
     fn markdown_view(&self) -> Element<'_, Message> {
         if self.viewing_note {
             // Notes already contain both sections as headings.
-            return match &self.note_content {
-                Some(content) => markdown::view_with(content.items(), &self.theme, &LinkViewer),
+            return match &self.note_source {
+                Some(source) => self.render_markdown(source),
                 None => text("Nothing to display.").into(),
             };
         }
@@ -804,7 +866,7 @@ impl App {
             return toggle.into();
         }
 
-        let content = markdown::view_with(self.thinking_content.items(), &self.theme, &LinkViewer);
+        let content = self.render_markdown(&self.thinking_source);
         let quote = container(content)
             .width(Length::Fill)
             .padding([10, 14])
@@ -827,7 +889,35 @@ impl App {
     }
 
     fn message_section(&self) -> Element<'_, Message> {
-        markdown::view_with(self.message_content.items(), &self.theme, &LinkViewer)
+        self.render_markdown(&self.message_source)
+    }
+
+    /// Renders markdown with the pi-mdview renderer (the engine behind the
+    /// pi-mdview viewer). The document is re-wrapped to the actual pane width
+    /// via `responsive`, and memoised per width by [`MarkdownRenderer`].
+    fn render_markdown<'a>(&'a self, source: &'a str) -> Element<'a, Message> {
+        let markdown = &self.markdown;
+        let theme = markdown.theme;
+        let font = fonts::monospace();
+
+        responsive(move |size| {
+            let columns = columns_for_width(size.width);
+            let lines = markdown.lines(source, columns);
+            let spans = pi_mdview::document_spans(&lines, &theme, font, None);
+
+            rich_text(spans)
+                .font(font)
+                .size(FONT_SIZE)
+                .line_height(LineHeight::Relative(LINE_HEIGHT_RATIO))
+                .width(Length::Shrink)
+                .wrapping(Wrapping::None)
+                .color(pi_mdview::widget::rgb(theme.text))
+                .on_link_click(Message::LinkClicked)
+                .into()
+        })
+        .width(Length::Fill)
+        .height(Length::Shrink)
+        .into()
     }
 }
 
@@ -859,4 +949,43 @@ where
         )
     ]
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn columns_follow_the_monospace_grid() {
+        // At the default 14px font and 0.6 em advance, roughly one column per
+        // 8.4 px, clamped to a sane range.
+        assert_eq!(columns_for_width(0.0), 20);
+        assert_eq!(columns_for_width(100_000.0), 400);
+        assert!(columns_for_width(840.0) >= 99);
+        assert!(columns_for_width(840.0) > columns_for_width(420.0));
+    }
+
+    #[test]
+    fn markdown_renderer_caches_and_matches_pi_mdview() {
+        let renderer = MarkdownRenderer::new();
+        let source = "# heading\n\nsome **bold** text";
+        let lines = renderer.lines(source, 40);
+        assert_eq!(
+            pi_mdview::plain_lines(&lines),
+            pi_mdview::plain_lines(&render_mdview(source, 40))
+        );
+        // A second call hits the cache and yields identical output.
+        assert_eq!(renderer.lines(source, 40), lines);
+    }
+
+    fn render_mdview(source: &str, columns: usize) -> Vec<MdLine> {
+        Renderer::new(MarkdownTheme::pi_dark())
+            .options(RenderOptions {
+                padding_x: 0,
+                padding_y: 0,
+                pad_to_width: false,
+                render_latex: true,
+            })
+            .render(source, columns)
+    }
 }

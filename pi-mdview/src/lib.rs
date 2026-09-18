@@ -35,11 +35,15 @@ pub mod theme;
 pub mod app;
 #[cfg(feature = "gui")]
 pub mod fonts;
+#[cfg(feature = "gui")]
+pub mod widget;
 
 pub use md::{Block, Document, Inline, List, ListItem, Table};
 pub use render::{RenderOptions, Renderer};
 pub use text::{visible_width, wrap_line, wrap_lines, Line, Rgb, Span, Style};
 pub use theme::{SyntaxColors, Theme};
+#[cfg(feature = "gui")]
+pub use widget::{document_spans, DocumentSpan};
 
 /// Renders `source` at `width` columns with pi's default (dark) theme.
 pub fn render_markdown(source: &str, width: usize) -> Vec<Line> {

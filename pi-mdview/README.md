@@ -21,6 +21,7 @@ markdown ──parse──▶ Document (blocks + inlines)              src/md.rs
                   Vec<Line> = Vec<Vec<Span + Style>>          src/render.rs + src/text.rs
                      │
                      └─ iced ──▶ one `rich_text` in a scrollable   src/app.rs
+                                          (span bridge: src/widget.rs)
 ```
 
 `Line` is the Rust equivalent of pi's `string[]` of ANSI lines. Keeping that
@@ -73,8 +74,24 @@ assert_eq!(lines[0].plain().trim_end(), "hello");
 // or keep a renderer around and re-render on resize
 let mut renderer = Renderer::new(Theme::pi_dark());
 let lines = renderer.render(&source, 100);
+```
 
-// iced: map each Span onto `iced::widget::span(...)` (see src/app.rs)
+With the `gui` feature (enabled by default) the `widget` module maps rendered
+lines onto iced `rich_text` spans — the same span mapping the viewer uses for
+its document, exposed so `pi-notes` (and other iced applications) can embed
+pi-mdview's rendering:
+
+```rust
+use pi_mdview::{document_spans, fonts};
+
+let lines = pi_mdview::render_markdown(source, columns);
+let spans = document_spans(&lines, &Theme::pi_dark(), fonts::monospace(), None);
+let document = iced::widget::rich_text(spans)
+    .font(fonts::monospace())
+    .size(14.0)
+    .line_height(iced::widget::text::LineHeight::Relative(1.447))
+    .width(iced::Length::Shrink)
+    .wrapping(iced::widget::text::Wrapping::None);
 ```
 
 Cargo features:

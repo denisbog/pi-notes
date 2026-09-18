@@ -6,8 +6,10 @@ A Cargo **workspace** holding three Rust tools for working with pi sessions:
   framework that:
 
 - **Displays the last pi message and its thinking block** as rendered Markdown
-  (headings, lists, quotes, code blocks, **tables**, and LaTeX **symbolic
-  notation** converted to Unicode).
+  (headings, lists, quotes, code blocks, **tables**, and inline LaTeX math),
+  rendered by **`pi-mdview`** — the same pipeline as pi's TUI. Notes display
+  exactly as they would in pi, including syntax-highlighted code blocks and
+  pi's theme colors.
 - **Stores notes** from the UI (save the current message + thinking as a
   Markdown note).
 - **Browses stored notes** through a collapsible file tree, showing notes
@@ -36,7 +38,9 @@ See [TUI extensions (inside pi)](#tui-extensions-inside-pi).
 
 The GUI was built starting from the official iced examples (`markdown`,
 `table`, `gallery`) in the local iced checkout at `~/projects/rust/iced`
-(iced `0.14-dev`, which ships a markdown widget with table support).
+(iced `0.14-dev`). Markdown rendering is no longer done by iced's markdown
+widget: `pi-notes` renders through the `pi-mdview` crate, so its documents are
+wrapped, themed and highlighted identically to pi's TUI.
 
 ---
 
@@ -64,13 +68,16 @@ Session files are JSONL. The app parses the entries and independently extracts:
 - **thinking** — the most recent non-empty `thinking` content block (the
   reasoning, which pi often attaches to later tool-use turns).
 
-### Symbolic notation
+### Markdown rendering
 
-Iced's markdown widget has no native LaTeX support, so `pi-notes/src/symbols.rs`
-pre-processes the raw Markdown before parsing, converting common TeX commands
-(`\alpha`, `\sum`, `\mathbb{R}`, `\sqrt{x}`, `x^2`, `a \leq b`, …) into Unicode
-(α, ∑, ℝ, √x, x², a ≤ b, …). Markdown **tables** are passed through untouched
-and rendered natively by pulldown-cmark inside iced.
+Markdown is rendered by the **`pi-mdview`** crate, the same renderer that
+powers the standalone pi-mdview viewer. `pi-notes` feeds the raw Markdown
+(message, thinking, notes) to `pi_mdview::Renderer` at the pane's actual
+column width and maps the resulting styled lines onto an iced `rich_text` via
+`pi_mdview::document_spans`. Rendering therefore matches pi's TUI: width-aware
+wrapping, box-drawing tables, pi's dark theme colors, `syntect`-highlighted
+code blocks and inline LaTeX math (`$\alpha^2$` → α²). Rendered documents are
+memoised per `(source, width)` so resizing does not re-highlight code.
 
 ### Notes storage hierarchy
 
@@ -246,9 +253,8 @@ pi-notes/
 │       │               to the selected leaf (message + thinking)
 │       ├── notes.rs    note storage + file-tree loading (mirrors pi hierarchy);
 │       │               rename + delete note helpers
-│       ├── symbols.rs  LaTeX -> Unicode symbolic-notation converter
 │       └── tree.rs     flatten notes tree into visible rows
-├── pi-mdview/                        # standalone Markdown viewer rendered like pi
+├── pi-mdview/                        # standalone Markdown viewer + renderer used by pi-notes
 │   ├── Cargo.toml
 │   ├── README.md                     # architecture, parity tests, known differences
 │   ├── src/
@@ -259,7 +265,8 @@ pi-notes/
 │   │   ├── theme.rs    pi dark/light markdown + syntax palettes
 │   │   ├── highlight.rs syntect + generated .tmTheme (pi's highlight.js theme)
 │   │   ├── latex.rs    LaTeX -> Unicode math
-│   │   ├── app.rs      iced front-end (rich_text + scrollable)
+│   │   ├── widget.rs   Line -> iced `rich_text` spans (used by pi-notes + the viewer)
+│   │   ├── app.rs      viewer front-end (rich_text + scrollable + selection)
 │   │   └── main.rs     `pi-mdview` binary
 │   ├── tests/parity.rs   golden + live parity against pi's renderer
 │   ├── examples/         dump_events, dump_scopes, dump_highlight, render_file
@@ -280,9 +287,9 @@ cargo test -p pi-mdview --no-default-features   # headless (no iced/syntect)
 cargo test -p pi-session-inspector
 ```
 
-The `pi-notes` tests validate symbol conversion (including that tables are left
-intact), tree-following session parsing, the editor round-trip, and note
-save/browse (asserting notes land under `~/.pi/agent/notes/<project>/`).
+The `pi-notes` tests validate tree-following session parsing, the editor
+round-trip, and note save/browse (asserting notes land under
+`~/.pi/agent/notes/<project>/`).
 
 The `pi-mdview` tests validate the markdown pipeline line-for-line against
 pi's own TUI renderer (golden files plus a live comparison when Node and

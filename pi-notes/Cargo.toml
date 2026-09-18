@@ -9,7 +9,14 @@ license.workspace = true
 # Built against iced 0.14 (crates.io). Only the lightweight tiny-skia software
 # renderer is enabled to keep compile times low; x11 + wayland are required on
 # Linux so the windowing backend (softbuffer) can pick a display.
-iced = { version="0.14", default-features = false, features = ["tiny-skia", "markdown", "thread-pool", "x11", "wayland"] }
+#
+# Markdown is rendered by `pi-mdview` (the same renderer as the pi-mdview
+# viewer) instead of iced's built-in markdown widget, so notes and pi messages
+# look exactly like they do in pi's TUI. The `markdown` feature is therefore
+# not enabled on iced.
+iced = { version="0.14", default-features = false, features = ["tiny-skia", "thread-pool", "x11", "wayland"] }
+
+pi-mdview = { path = "../pi-mdview" }
 
 serde_json = "1"
 chrono = "0.4"

@@ -3,6 +3,9 @@
 //! message as a note (in a directory hierarchy that mirrors pi's session
 //! files) and browse previously stored notes through a file tree.
 //!
+//! Markdown is rendered by the `pi-mdview` crate (the same renderer as the
+//! pi-mdview viewer), so documents look exactly like they do in pi's TUI.
+//!
 //! It is designed to be launched from inside pi as a `/notes` command (see
 //! `extension/notes.ts`). The current session is located via the
 //! `PI_SESSION_FILE` environment variable that pi sets, falling back to the
@@ -12,7 +15,6 @@ mod app;
 mod editor;
 mod notes;
 mod session;
-mod symbols;
 mod tree;
 
 use app::App;
