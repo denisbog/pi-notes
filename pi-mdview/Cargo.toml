@@ -1,0 +1,46 @@
+[package]
+name = "pi-mdview"
+version.workspace = true
+edition.workspace = true
+description = "Markdown viewer (Rust + iced) that renders documents the way pi's TUI does"
+license.workspace = true
+
+[features]
+default = ["gui", "syntax"]
+# iced front-end (the `pi-mdview` binary and `pi_mdview::app`).
+gui = ["dep:iced"]
+# Syntax-highlighted code blocks via syntect (pi uses highlight.js).
+syntax = ["dep:syntect"]
+
+[dependencies]
+pulldown-cmark = { version = "0.12", default-features = false }
+unicode-width = "0.2"
+
+iced = { version = "0.14", default-features = false, features = [
+    "tiny-skia",
+    "thread-pool",
+    "x11",
+    "wayland",
+], optional = true }
+
+syntect = { version = "5.2", default-features = false, features = [
+    "default-syntaxes",
+    "plist-load",
+    "regex-fancy",
+], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[[bin]]
+name = "pi-mdview"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[example]]
+name = "dump_scopes"
+required-features = ["syntax"]
+
+[[example]]
+name = "dump_highlight"
+required-features = ["syntax"]

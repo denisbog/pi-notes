@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "pi-notes",               # GUI: view pi message/thinking + browse/store notes
+    "pi-mdview",              # GUI: standalone markdown viewer rendered like pi
     "pi-session-inspector",   # CLI: per-session token/cost HTML usage reports
 ]
 

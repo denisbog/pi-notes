@@ -1,6 +1,6 @@
 # pi-notes workspace
 
-A Cargo **workspace** holding two Rust tools for working with pi sessions:
+A Cargo **workspace** holding three Rust tools for working with pi sessions:
 
 - **`pi-notes`** — a desktop GUI written in **Rust** with the **iced** GUI
   framework that:
@@ -14,6 +14,17 @@ A Cargo **workspace** holding two Rust tools for working with pi sessions:
   grouped by project.
 - Is **callable from pi** as a `/notes` command, and generates per-session
   HTML usage reports with `/report` (via the `pi-session-inspector` crate).
+- **`pi-mdview`** — a standalone **Markdown viewer** in Rust + iced that
+  renders documents the way pi's TUI does: it is a structural port of pi's
+  markdown pipeline (`marked` tokens → themed styled lines → width-aware
+  wrapping → renderer), verified line-for-line against pi's own renderer with
+  golden parity tests. It bundles **JetBrains Mono** — the font pi renders in
+  under the default Ghostty setup — and defaults to Ghostty's `#282c34`
+  background, so code, wrapping and table borders look the same as in the
+  terminal. Text is selectable (drag / double-click / Ctrl+C), scrolling is
+  eased rather than stepped, and the line height is a roomy 1.5×. Use it as a
+  binary (`cargo run -p pi-mdview -- file.md`) or as a library. See
+  [`pi-mdview/README.md`](pi-mdview/README.md).
 - **`pi-session-inspector`** — a CLI that scans pi session logs and emits
   token-consumption / pricing / cache-loss reports (text, CSV, or a
   self-contained HTML page).
@@ -79,12 +90,16 @@ in `--…--`, exactly mirroring pi. The left pane browses the whole
 ## Build & install
 
 ```bash
-# build both tools (workspace)
+# build all tools (workspace)
 cargo build --release
 
-# install both binaries on PATH
+# install the binaries on PATH
 install -m755 target/release/pi-notes ~/.local/bin/pi-notes
+install -m755 target/release/pi-mdview ~/.local/bin/pi-mdview
 install -m755 target/release/pi-session-inspector ~/.local/bin/pi-session-inspector
+
+# view any markdown file the way pi renders it
+pi-mdview README.md
 
 # install the pi extensions so `/notes` (GUI), `/report` (HTML),
 # `/note` and `/notes-view` (TUI) work inside pi
@@ -97,6 +112,8 @@ cp -r extension/notes-shared ~/.pi/agent/extensions/notes-shared
 
 > Building compiles the local iced checkout from source, so the first build
 > takes a few minutes. Only the lightweight `tiny-skia` renderer is enabled.
+> `pi-mdview`'s renderer library can be built and tested without iced at all
+> (`cargo test -p pi-mdview --no-default-features`).
 
 ## Usage
 
@@ -212,7 +229,7 @@ content, the footer shows the current position as `lines 1-18/60`.
 
 ```
 pi-notes/
-├── Cargo.toml                        # workspace: pi-notes + pi-session-inspector
+├── Cargo.toml                        # workspace: pi-notes + pi-mdview + pi-session-inspector
 ├── extension/
 │   ├── notes.ts                      # pi extension registering /notes (GUI) and /report (HTML)
 │   ├── session-notes.ts              # /note: save session entries as Markdown notes
@@ -231,6 +248,22 @@ pi-notes/
 │       │               rename + delete note helpers
 │       ├── symbols.rs  LaTeX -> Unicode symbolic-notation converter
 │       └── tree.rs     flatten notes tree into visible rows
+├── pi-mdview/                        # standalone Markdown viewer rendered like pi
+│   ├── Cargo.toml
+│   ├── README.md                     # architecture, parity tests, known differences
+│   ├── src/
+│   │   ├── lib.rs      public API (render_markdown, Renderer, Theme, ...)
+│   │   ├── md.rs       pulldown-cmark events -> Document (pi's `marked` tokens)
+│   │   ├── render.rs   renderToken/renderList/renderTable port + wrapping
+│   │   ├── text.rs     Line/Span/Style model + wrapTextWithAnsi port
+│   │   ├── theme.rs    pi dark/light markdown + syntax palettes
+│   │   ├── highlight.rs syntect + generated .tmTheme (pi's highlight.js theme)
+│   │   ├── latex.rs    LaTeX -> Unicode math
+│   │   ├── app.rs      iced front-end (rich_text + scrollable)
+│   │   └── main.rs     `pi-mdview` binary
+│   ├── tests/parity.rs   golden + live parity against pi's renderer
+│   ├── examples/         dump_events, dump_scopes, dump_highlight, render_file
+│   └── tools/            pi_render.mjs oracle, parity fixture, golden files
 └── pi-session-inspector/             # CLI usage/price report tool
     ├── Cargo.toml
     ├── src/            (see REPORTING.md for its full docs)
@@ -241,11 +274,16 @@ pi-notes/
 ## Tests
 
 ```bash
-cargo test        # runs tests for both workspace crates
+cargo test        # runs tests for all workspace crates
 cargo test -p pi-notes
+cargo test -p pi-mdview --no-default-features   # headless (no iced/syntect)
 cargo test -p pi-session-inspector
 ```
 
 The `pi-notes` tests validate symbol conversion (including that tables are left
 intact), tree-following session parsing, the editor round-trip, and note
 save/browse (asserting notes land under `~/.pi/agent/notes/<project>/`).
+
+The `pi-mdview` tests validate the markdown pipeline line-for-line against
+pi's own TUI renderer (golden files plus a live comparison when Node and
+pi-tui are available), plus style assertions for every theme key.
