@@ -47,7 +47,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { padTo, shortenPath } from "./notes-shared/shared.ts";
+import { lineRangeLabel, padTo, shortenPath } from "./notes-shared/shared.ts";
 
 // ---------------------------------------------------------------------------
 // Data model (mirrors pi-session-inspector/src/html.rs::session_json)
@@ -199,8 +199,8 @@ interface StatusMessage {
 // ---------------------------------------------------------------------------
 
 const HELP_TEXT =
-  "↑/↓ move · enter detail · n/N flagged · [/] session · h/s/f toggle " +
-  "histogram/stats/flags · y copy · r reload · esc close";
+  "↑/↓ move · enter detail · ctrl+d/u or pgup/pgdn scroll · n/N flagged · [/] session " +
+  "· h/s/f hist/stats/flags · y copy · r reload · esc close";
 
 interface ReportViewerOptions {
   /** Re-run pi-session-inspector and return fresh data (for `r`). */
@@ -638,6 +638,7 @@ class ReportViewer {
 
   private renderDetail(width: number, height: number): string[] {
     const all = this.detailLines(width);
+    this.lastDetailTotal = all.length;
     const max = Math.max(0, all.length - height);
     this.detailScroll = Math.max(0, Math.min(this.detailScroll, max));
     const out = all
@@ -650,7 +651,7 @@ class ReportViewer {
   // --- actions --------------------------------------------------------------
 
   private move(delta: number): void {
-    if (this.focus !== "list") return;
+    if (this.focus === "detail") return this.scrollDetail(delta);
     const next = this.clampCursor(this.cursor + delta);
     if (next !== this.cursor) {
       this.cursor = next;
@@ -659,14 +660,16 @@ class ReportViewer {
     }
   }
 
+  /** Scroll the selected request's detail pane, keeping it in range. */
+  private scrollDetail(delta: number): void {
+    this.detailScroll += delta;
+    this.refresh();
+  }
+
   private page(delta: number): void {
-    if (this.focus === "detail") {
-      this.detailScroll += delta;
-      this.refresh();
-      return;
-    }
-    const visible = Math.max(1, Math.floor(this.bodyHeight() / 2));
-    this.move(delta * visible);
+    const pageSize = Math.max(1, this.bodyHeight() - 1);
+    if (this.focus === "detail") return this.scrollDetail(delta * pageSize);
+    this.move(delta * Math.max(1, Math.floor(this.bodyHeight() / 2)));
   }
 
   private jumpFlagged(dir: 1 | -1): void {
@@ -773,6 +776,12 @@ class ReportViewer {
     if (matchesKey(data, Key.down)) return this.move(1);
     if (matchesKey(data, Key.pageUp)) return this.page(-1);
     if (matchesKey(data, Key.pageDown)) return this.page(1);
+
+    // Half-page scrolling of the detail pane, available whether or not the
+    // detail pane has focus.
+    const halfPage = Math.max(1, Math.floor(this.bodyHeight() / 2));
+    if (matchesKey(data, Key.ctrl("d"))) return this.scrollDetail(halfPage);
+    if (matchesKey(data, Key.ctrl("u"))) return this.scrollDetail(-halfPage);
     if (matchesKey(data, Key.home)) {
       if (this.focus === "detail") {
         this.detailScroll = 0;
@@ -812,6 +821,7 @@ class ReportViewer {
     return this.lastBodyHeight ?? 6;
   }
   private lastBodyHeight = 6;
+  private lastDetailTotal = 0;
 
   render(width: number): string[] {
     if (this.cachedWidth === width && this.cachedLines) return this.cachedLines;
@@ -885,12 +895,16 @@ class ReportViewer {
     const footer = this.status
       ? theme.fg(this.status.type === "error" ? "error" : "accent", `  ${this.status.text}`)
       : this.focus === "detail"
-        ? theme.fg("muted", "  scrolling detail · ") + theme.fg("accent", "enter/esc back")
+        ? theme.fg("muted", `  ${lineRangeLabel(this.lastDetailTotal, this.detailScroll, this.bodyHeight())} · `) +
+          theme.fg("accent", "↑↓/pgup/pgdn scroll · enter/esc back")
         : theme.fg(
             "muted",
             `  ${total} request${total === 1 ? "" : "s"} · ${large} large · ${sess?.invalidations ?? 0} cache loss · ` +
               `${this.flagList().length} flagged`,
-          );
+          ) +
+          (this.lastDetailTotal > this.bodyHeight()
+            ? theme.fg("muted", " · ctrl+d/u scroll detail")
+            : "");
     lines.push(truncateToWidth(footer, width, ""));
 
     const finalLines = lines.slice(0, rows);
