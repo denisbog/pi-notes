@@ -248,6 +248,28 @@ pub fn write_report(path: &Path, summaries: &[SessionSummary]) -> std::io::Resul
     Ok(sessions.len())
 }
 
+/// Write the exact data model embedded in the HTML report as JSON.
+///
+/// The returned shape is `{"sessions": [ ... ]}`, where each session carries its
+/// aggregate stats plus the ordered `requests` list (usage, thinking, text,
+/// tool calls and results) used to render the histogram and timeline. This lets
+/// terminal front-ends (e.g. the pi `/report-view` extension) render the same
+/// information without scraping the HTML.
+///
+/// Returns the number of sessions written.
+pub fn write_json(path: &Path, summaries: &[SessionSummary]) -> std::io::Result<usize> {
+    let mut sessions: Vec<Value> = Vec::new();
+    for summary in summaries {
+        let entries = crate::scanner::parse_entries(&summary.session_file)?;
+        let requests = assemble_requests(&entries);
+        sessions.push(session_json(summary, &requests));
+    }
+
+    let data = serde_json::to_string_pretty(&json!({"sessions": sessions})).unwrap_or_default();
+    std::fs::write(path, data)?;
+    Ok(sessions.len())
+}
+
 fn template(data_json: &str, session_count: usize) -> String {
     let count_str = if session_count == 1 {
         "1 session".to_string()

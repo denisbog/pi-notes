@@ -233,6 +233,7 @@ pi-session-inspector -s date-asc
 |---|---|
 | `--sessions-dir <PATH>` | Override the sessions directory (default `~/.pi/agent/sessions`) |
 | `--html <PATH>` | Write a self-contained HTML report to `<PATH>` for the matched session(s), then exit |
+| `--json <PATH>` | Write the report data model (the same data the HTML report embeds) as JSON to `<PATH>`, then exit |
 | `-h, --help` | Print help |
 | `-V, --version` | Print version |
 
@@ -269,6 +270,23 @@ sessions into a single report:
 ```bash
 pi-session-inspector --html /tmp/both.html -S 'rm-otel-dash-v[28]'
 ```
+
+### JSON report (`--json <PATH>`)
+
+Writes the exact data model the HTML page embeds, so terminal front-ends can
+render the same information without scraping HTML:
+
+```bash
+pi-session-inspector --json /tmp/report.json -S 'rm-otel-dash-v2'
+```
+
+The file has the shape `{"sessions": [ ... ]}`; each session carries the
+aggregate stats (`input`, `cached`, `output`, `reasoning`, `total`, `cost`,
+`invalidations`, `lostTokens`, `lostCost`, `contextEnd`, `durationSecs`, ...)
+plus an ordered `requests` array with per-request usage, cache state
+(`invalidated` / `lost`), `thinking`, `text` and `toolCalls` (arguments and
+results). This is what the pi `/report-view` extension consumes to render the
+report inside pi's TUI.
 
 ---
 

@@ -28,12 +28,13 @@ A Cargo **workspace** holding three Rust tools for working with pi sessions:
   binary (`cargo run -p pi-mdview -- file.md`) or as a library. See
   [`pi-mdview/README.md`](pi-mdview/README.md).
 - **`pi-session-inspector`** — a CLI that scans pi session logs and emits
-  token-consumption / pricing / cache-loss reports (text, CSV, or a
-  self-contained HTML page).
+  token-consumption / pricing / cache-loss reports (text, CSV, a
+  self-contained HTML page, or the same data model as JSON for TUI front-ends).
 
-The repo also ships two self-contained **pi TUI extensions** (TypeScript) that
-save and browse the same Markdown notes from inside pi — a Session
-Tree-style note picker (`/note`) and a notes browser/editor (`/notes-view`).
+The repo also ships three self-contained **pi TUI extensions** (TypeScript) that
+save and browse the same Markdown notes from inside pi, and render the usage
+report in the terminal — a Session Tree-style note picker (`/note`), a notes
+browser/editor (`/notes-view`), and a report viewer (`/report-view`).
 See [TUI extensions (inside pi)](#tui-extensions-inside-pi).
 
 The GUI was built starting from the official iced examples (`markdown`,
@@ -109,10 +110,10 @@ install -m755 target/release/pi-session-inspector ~/.local/bin/pi-session-inspec
 pi-mdview README.md
 
 # install the pi extensions so `/notes` (GUI), `/report` (HTML),
-# `/note` and `/notes-view` (TUI) work inside pi
+# `/report-view` (TUI report), `/note` and `/notes-view` (TUI) work inside pi
 mkdir -p ~/.pi/agent/extensions
 cp extension/notes.ts extension/session-notes.ts extension/notes-viewer.ts \
-  ~/.pi/agent/extensions/
+  extension/report-view.ts ~/.pi/agent/extensions/
 cp -r extension/notes-shared ~/.pi/agent/extensions/notes-shared
 # then run /reload inside pi
 ```
@@ -150,6 +151,20 @@ notes files and overwritten on every run (reports are per session):
 The report is written to `~/.pi/agent/notes/<project>/usage-report.html`,
 regenerated (overwritten) each time `/report` is run, and then **opened in
 your default browser** automatically.
+
+Render the same report **inside pi** (no browser) with:
+
+```
+/report-view [path-to-session.jsonl]
+```
+
+This asks `pi-session-inspector --json` for the exact data model the HTML page
+embeds and draws it with pi's TUI components: the stats row, the log-scaled
+fresh-input **histogram** (amber = large input, red = cache lost, `▲` markers),
+the **cache-loss timeline** and **large-request** list, and a scrollable
+**request timeline** (usage chips, `next call` estimate, thinking, assistant
+text, tool calls and results) — see
+[TUI extensions (inside pi)](#tui-extensions-inside-pi).
 
 In the UI:
 
@@ -218,19 +233,41 @@ Two self-contained pi **TUI** extensions in `extension/` read/write the same
     (requires pi to run inside herdr). When pi quits, that tab is closed
     again, and the note is re-read from disk the next time you interact with
     the viewer.
+- **`report-view.ts`** — `/report-view` renders the `pi-session-inspector`
+  usage report **inside pi**, using the exact data model the HTML `/report`
+  page embeds (fetched with `pi-session-inspector --json`):
+  - a stats row (input, cached, output, reasoning, requests, large input,
+    cache-loss events, lost tokens/cost, end-of-session context, cost,
+    duration), a log-scaled fresh-input **histogram** (amber = large input,
+    red = cache lost, plus an `▲` marker row) and a compact legend;
+  - the **cache-loss timeline** (per event: gap, `cache A → B (D%)`, re-sent
+    tokens, cost) and the top-five **large requests** list;
+  - the **request timeline**: a scrollable list on the left (index, time,
+    model, input/cached/output/cost) and the selected request's detail on the
+    right (usage chips, the `next call` re-sent-token estimate, thinking,
+    assistant text rendered as Markdown, and every tool call with its JSON
+    arguments and results).
 
-Install both next to the GUI extension and reload pi:
+  Keys: `↑/↓` move · `enter`/`tab` focus detail (then `↑/↓`/`PgUp`/`PgDn`
+  scroll) · `n`/`N` jump to next/previous flagged request (large input or
+  cache loss) · `[`/`]` switch session when the selector matched several ·
+  `h`/`s`/`f` toggle the histogram / stats / flagged lists · `y` copy the
+  request as Markdown to the clipboard · `r` regenerate · `Esc` back/close.
+
+Install the TUI extensions next to the GUI extension and reload pi:
 
 ```bash
-cp extension/session-notes.ts extension/notes-viewer.ts ~/.pi/agent/extensions/
+cp extension/session-notes.ts extension/notes-viewer.ts \
+  extension/report-view.ts ~/.pi/agent/extensions/
 cp -r extension/notes-shared ~/.pi/agent/extensions/notes-shared
 # then run /reload inside pi
 ```
 
-The two extensions share small note-storage, formatting and Markdown-preview
+The extensions share small note-storage, formatting and Markdown-preview
 helpers (`notes-shared/shared.ts`, in a subdirectory so pi does not load it as
-an extension). Both use the same preview "peek" view; while peeking / viewing
-content, the footer shows the current position as `lines 1-18/60`.
+an extension). `session-notes` and `notes-viewer` use the same preview "peek"
+view; while peeking / viewing content, the footer shows the current position as
+`lines 1-18/60`.
 
 ## Project layout
 
@@ -241,6 +278,7 @@ pi-notes/
 │   ├── notes.ts                      # pi extension registering /notes (GUI) and /report (HTML)
 │   ├── session-notes.ts              # /note: save session entries as Markdown notes
 │   ├── notes-viewer.ts               # /notes-view: browse/view/rename/delete/edit stored notes
+│   ├── report-view.ts                # /report-view: render the usage report inside pi
 │   └── notes-shared/
 │       └── shared.ts                 # shared storage, formatting and peek/Markdown helpers
 ├── pi-notes/                         # iced GUI

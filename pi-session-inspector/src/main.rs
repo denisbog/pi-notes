@@ -93,6 +93,13 @@ struct Cli {
     #[arg(long)]
     html: Option<String>,
 
+    /// Write the report data as JSON to this file for the matched session(s),
+    /// then exit. Emits the same model the HTML report embeds (aggregate stats
+    /// + per-request usage/thinking/text/tool calls), for terminal front-ends
+    /// such as the pi `/report-view` extension.
+    #[arg(long)]
+    json: Option<String>,
+
     /// Print help and the full reporting guide (REPORTING.md)
     #[arg(short = 'h', long)]
     help: bool,
@@ -245,6 +252,26 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("Error writing HTML report: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // JSON report mode: serialize the HTML report's data model and write it to
+    // the requested file, printing the path.
+    if let Some(json_path) = cli.json {
+        let path = std::path::Path::new(&json_path);
+        match html::write_json(path, &results) {
+            Ok(n) => {
+                if n == 0 {
+                    eprintln!("No sessions matched the filters; nothing written.");
+                    std::process::exit(1);
+                }
+                println!("Wrote JSON report for {} session(s) -> {}", n, path.display());
+            }
+            Err(e) => {
+                eprintln!("Error writing JSON report: {}", e);
                 std::process::exit(1);
             }
         }
