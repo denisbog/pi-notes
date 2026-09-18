@@ -282,6 +282,7 @@ class SessionTreePicker {
   private labelInput: Input | null = null;
   private labelTarget: FlatNode | null = null;
   private peek = false;
+  private peekFocus = false;
   private peekScroll = 0;
   private peekCache?: { id: string; width: number; lines: string[] };
 
@@ -520,6 +521,7 @@ class SessionTreePicker {
   /** Peek: preview the highlighted entry's full Markdown content. */
   private togglePeek(): void {
     this.peek = !this.peek;
+    this.peekFocus = false;
     this.peekScroll = 0;
     this.invalidate();
     this.tui.requestRender();
@@ -589,6 +591,21 @@ class SessionTreePicker {
     this.setFilter(FILTER_MODES[(index + direction + FILTER_MODES.length) % FILTER_MODES.length]);
   }
 
+  /** Append printable input to the search query; returns false for control keys. */
+  private appendSearchInput(data: string): boolean {
+    const hasControlChars = [...data].some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+    });
+    if (hasControlChars || data.length === 0) return false;
+    this.search += data;
+    this.cursor = 0;
+    this.peekScroll = 0;
+    this.rebuild();
+    this.tui.requestRender();
+    return true;
+  }
+
   handleInput(data: string): void {
     if (this.status) this.status = "";
 
@@ -626,36 +643,84 @@ class SessionTreePicker {
     if (this.matches(data, "app.tree.filter.cycleForward")) return this.cycleFilter(1);
     if (this.matches(data, "app.tree.filter.cycleBackward")) return this.cycleFilter(-1);
 
-    if (this.peek) {
-      if (matchesKey(data, Key.ctrl("p")) || matchesKey(data, Key.escape)) {
-        return this.togglePeek();
+    // Save the note from anywhere (Enter also saves when not peeking).
+    if (matchesKey(data, Key.ctrl("w"))) {
+      this.done([...this.selected]);
+      return;
+    }
+
+    if (matchesKey(data, Key.escape)) {
+      if (this.search) {
+        this.search = "";
+        this.cursor = 0;
+        this.peekScroll = 0;
+        this.rebuild();
+        this.tui.requestRender();
+        return;
       }
-      if (this.peekLayout().split) {
-        if (this.matches(data, "app.tree.foldOrUp")) return this.branchJump("up");
-        if (this.matches(data, "app.tree.unfoldOrDown")) return this.branchJump("down");
-        if (matchesKey(data, Key.up)) return this.peekMove(-1);
-        if (matchesKey(data, Key.down)) return this.peekMove(1);
-        if (matchesKey(data, Key.pageUp)) return this.scrollPeek(-this.peekRows());
-        if (matchesKey(data, Key.pageDown)) return this.scrollPeek(this.peekRows());
-        if (matchesKey(data, Key.left)) return this.page(-1);
-        if (matchesKey(data, Key.right)) return this.page(1);
-        if (matchesKey(data, Key.home)) return this.peekMoveTo(0);
-        if (matchesKey(data, Key.end)) return this.peekMoveTo(this.visible.length - 1);
-      } else {
-        if (matchesKey(data, Key.up)) return this.scrollPeek(-1);
-        if (matchesKey(data, Key.down)) return this.scrollPeek(1);
-        if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.left)) {
-          return this.scrollPeek(-this.peekRows());
-        }
-        if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.right)) {
-          return this.scrollPeek(this.peekRows());
-        }
-        if (matchesKey(data, Key.home)) return this.scrollPeek(-Number.MAX_SAFE_INTEGER);
-        if (matchesKey(data, Key.end)) return this.scrollPeek(Number.MAX_SAFE_INTEGER);
+      if (this.peekFocus) {
+        this.peekFocus = false;
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
+      if (this.peek) {
+        this.togglePeek();
+        return;
+      }
+      this.done(null);
+      return;
+    }
+
+    if (matchesKey(data, Key.ctrl("p"))) return this.togglePeek();
+
+    // Peek content focus: Enter opened the preview, arrows now scroll it.
+    if (this.peekFocus) {
+      if (matchesKey(data, Key.up)) return this.scrollPeek(-1);
+      if (matchesKey(data, Key.down)) return this.scrollPeek(1);
+      if (matchesKey(data, Key.pageUp)) return this.scrollPeek(-this.peekRows());
+      if (matchesKey(data, Key.pageDown)) return this.scrollPeek(this.peekRows());
+      if (matchesKey(data, Key.home)) return this.scrollPeek(-Number.MAX_SAFE_INTEGER);
+      if (matchesKey(data, Key.end)) return this.scrollPeek(Number.MAX_SAFE_INTEGER);
+      if (matchesKey(data, Key.enter)) {
+        this.peekFocus = false;
+        this.invalidate();
+        this.tui.requestRender();
+        return;
       }
       if (matchesKey(data, Key.tab)) return this.toggle();
+      if (matchesKey(data, Key.backspace)) {
+        if (this.search.length > 0) {
+          this.search = this.search.slice(0, -1);
+          this.cursor = 0;
+          this.peekScroll = 0;
+          this.rebuild();
+          this.tui.requestRender();
+        }
+        return;
+      }
+      if (this.appendSearchInput(data)) return;
+      return;
+    }
+
+    // Peek list focus: arrows move the selection, Enter views the content.
+    if (this.peek) {
+      if (this.matches(data, "app.tree.foldOrUp")) return this.branchJump("up");
+      if (this.matches(data, "app.tree.unfoldOrDown")) return this.branchJump("down");
+      if (matchesKey(data, Key.up)) return this.peekMove(-1);
+      if (matchesKey(data, Key.down)) return this.peekMove(1);
+      if (this.matches(data, "tui.editor.cursorLeft", Key.left)) return this.page(-1);
+      if (this.matches(data, "tui.editor.cursorRight", Key.right)) return this.page(1);
+      if (matchesKey(data, Key.pageUp)) return this.page(-1);
+      if (matchesKey(data, Key.pageDown)) return this.page(1);
+      if (matchesKey(data, Key.home)) return this.peekMoveTo(0);
+      if (matchesKey(data, Key.end)) return this.peekMoveTo(this.visible.length - 1);
+      if (matchesKey(data, Key.tab)) return this.toggle();
       if (matchesKey(data, Key.enter)) {
-        this.done([...this.selected]);
+        this.peekFocus = true;
+        this.peekScroll = 0;
+        this.invalidate();
+        this.tui.requestRender();
         return;
       }
       if (matchesKey(data, Key.backspace)) {
@@ -668,31 +733,7 @@ class SessionTreePicker {
         }
         return;
       }
-      const control = [...data].some((ch) => {
-        const code = ch.charCodeAt(0);
-        return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-      });
-      if (!control && data.length > 0) {
-        this.search += data;
-        this.cursor = 0;
-        this.peekScroll = 0;
-        this.rebuild();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    if (matchesKey(data, Key.ctrl("p"))) return this.togglePeek();
-
-    if (this.matches(data, "tui.select.cancel", Key.escape)) {
-      if (this.search) {
-        this.search = "";
-        this.cursor = 0;
-        this.rebuild();
-        this.tui.requestRender();
-      } else {
-        this.done(null);
-      }
+      if (this.appendSearchInput(data)) return;
       return;
     }
     if (this.matches(data, "tui.select.up", Key.up)) return this.move(-1);
@@ -721,16 +762,7 @@ class SessionTreePicker {
       return;
     }
 
-    const hasControlChars = [...data].some((ch) => {
-      const code = ch.charCodeAt(0);
-      return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-    });
-    if (!hasControlChars && data.length > 0) {
-      this.search += data;
-      this.cursor = 0;
-      this.rebuild();
-      this.tui.requestRender();
-    }
+    this.appendSearchInput(data);
   }
 
   invalidate(): void {
@@ -796,12 +828,11 @@ class SessionTreePicker {
       const from = total === 0 ? 0 : this.peekScroll + 1;
       const to = Math.min(this.peekScroll + entryRows, total);
       const sel = this.selected.size ? ` · ${this.selected.size} selected` : "";
+      const hint = this.peekFocus
+        ? " · ↑↓ scroll · esc back · ctrl+w save"
+        : " · enter view · esc close peek · ctrl+w save";
       lines.push(
-        truncateToWidth(
-          theme.fg("muted", `  lines ${from}-${to}/${total}${sel}`) +
-            theme.fg("accent", " · ctrl+p/esc close peek · tab select · enter save"),
-          width,
-        ),
+        truncateToWidth(theme.fg("muted", `  lines ${from}-${to}/${total}${sel}`) + theme.fg("accent", hint), width),
       );
     } else if (this.status) {
       lines.push(truncateToWidth(theme.fg("muted", pos) + theme.fg("accent", ` · ${this.status}`), width));
@@ -933,9 +964,14 @@ export default function (pi: ExtensionAPI) {
           .trim() || "note";
 
       const title = await ctx.ui.input("Note title", defaultTitle);
+      if (title === undefined) {
+        ctx.ui.notify("Note cancelled — nothing saved.", "info");
+        return;
+      }
+      const noteTitle = title.trim() || defaultTitle;
 
       const header = [
-        `# ${title || defaultTitle}`,
+        `# ${noteTitle}`,
         "",
         `_Saved from pi session \`${ctx.sessionManager.getSessionId()}\` on ${new Date().toLocaleString()}_`,
         "",
@@ -952,7 +988,7 @@ export default function (pi: ExtensionAPI) {
 
       const content = `${header}${body}\n`;
       try {
-        const file = saveNote(ctx.cwd, title ?? defaultTitle, content);
+        const file = saveNote(ctx.cwd, noteTitle, content);
         ctx.ui.notify(`Saved ${chosen.length} entr${chosen.length === 1 ? "y" : "ies"} to ${file}`, "info");
       } catch (error: any) {
         ctx.ui.notify(`Failed to save note: ${error?.message ?? error}`, "error");

@@ -170,10 +170,12 @@ Two self-contained pi **TUI** extensions in `extension/` read/write the same
   even when they no longer match** the filter/search. `ctrl+p` toggles a peek
   preview of the highlighted entry (full Markdown): on wide terminals the list
   splits vertically with the preview on the right, otherwise the preview
-  replaces the list (scroll with `↑/↓`/`PgUp`/`PgDn`, `ctrl+p`/`Esc` closes the
-  peek); the filter/cycle and copy/label shortcuts keep working while peeking,
-  so you can decide whether to include an entry. `Enter` saves
-  the selected entries as one Markdown note (title prompt follows) to
+  replaces the list. While peeking, `Enter` moves focus into the preview so
+  `↑/↓`/`PgUp`/`PgDn` scroll it and `Esc` returns to the list; the
+  filter/cycle and copy/label shortcuts keep working while peeking, so you can
+  decide whether to include an entry. `Enter` saves the selected entries when
+  not peeking, `ctrl+w` saves from anywhere, and cancelling the title prompt
+  saves nothing. The note is written to
   `~/.pi/agent/notes/<project>/<timestamp>_<title>.md`.
 - **`notes-viewer.ts`** — `/notes-view` browses stored notes with the same
   Session Tree-style chrome (title, wrapping key hints, `Type to search:`):
