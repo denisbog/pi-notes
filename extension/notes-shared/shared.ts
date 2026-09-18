@@ -19,8 +19,16 @@ import path from "node:path";
 
 /** `/home/denis/llm` -> `--home-denis-llm--` (pi's session dir convention). */
 export function projectDirName(cwd: string): string {
-  const stripped = cwd.replace(/^\/+/, "").replace(/\/+$/, "");
-  return `--${stripped.replace(/\//g, "-")}--`;
+  // Normalize Windows paths to POSIX form so the same logic works everywhere:
+  // backslashes become slashes and the drive letter prefix is dropped
+  // ("C:\\Users\\denis\\llm" -> "/Users/denis/llm").
+  const normalized = cwd.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "");
+  const stripped = normalized.replace(/^\/+/, "").replace(/\/+$/, "");
+  const joined = stripped.replace(/\//g, "-");
+  // Sanitize anything else that would be unsafe in a directory name, so a
+  // Windows path can never produce an invalid or hostile folder name.
+  const safe = joined.replace(/[^A-Za-z0-9\-_. ]/g, "_").trim().replace(/\.+$/, "");
+  return `--${safe || "root"}--`;
 }
 
 /** Sanitize a user-provided name into a safe file stem. */
