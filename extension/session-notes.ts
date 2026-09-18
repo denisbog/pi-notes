@@ -25,61 +25,22 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, copyToClipboard, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
-  Markdown,
   matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import fs from "node:fs";
-import path from "node:path";
-
-// ---------------------------------------------------------------------------
-// Note storage (mirrors pi-notes/src/notes.rs)
-// ---------------------------------------------------------------------------
-
-/** `/home/denis/llm` -> `--home-denis-llm--` (pi's session dir convention). */
-function projectDirName(cwd: string): string {
-  const stripped = cwd.replace(/^\/+/, "").replace(/\/+$/, "");
-  const normalized = stripped.replace(/\//g, "-");
-  return `--${normalized}--`;
-}
-
-function sanitizeStem(title: string): string {
-  let out = "";
-  for (const ch of title) {
-    if (/[A-Za-z0-9\-_. ]/.test(ch)) out += ch;
-    else out += "_";
-  }
-  const trimmed = out.trim().replace(/\.+$/, "").replace(/ /g, "_");
-  return trimmed.length > 0 ? trimmed : "note";
-}
-
-function timestampCompact(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
-}
-
-function notesDir(cwd: string): string {
-  return path.join(getAgentDir(), "notes", projectDirName(cwd));
-}
-
-function saveNote(cwd: string, title: string, content: string): string {
-  const dir = notesDir(cwd);
-  fs.mkdirSync(dir, { recursive: true });
-  const stem = title.trim() ? `${timestampCompact()}_${sanitizeStem(title)}` : timestampCompact();
-  const file = path.join(dir, `${stem}.md`);
-  fs.writeFileSync(file, content, "utf8");
-  return file;
-}
+import {
+  MarkdownCache,
+  lineRangeLabel,
+  padTo,
+  saveNote,
+  slicePreview,
+} from "./notes-shared/shared.ts";
 
 // ---------------------------------------------------------------------------
 // Session entry rendering helpers
@@ -284,7 +245,7 @@ class SessionTreePicker {
   private peek = false;
   private peekFocus = false;
   private peekScroll = 0;
-  private peekCache?: { id: string; width: number; lines: string[] };
+  private readonly peekCache = new MarkdownCache();
 
   private cachedWidth?: number;
   private cachedLines?: string[];
@@ -534,19 +495,8 @@ class SessionTreePicker {
   private peekLines(width: number): string[] {
     const node = this.visible[this.cursor];
     if (!node) return [this.theme.fg("muted", "  No entry to preview")];
-    const id = node.entry.id;
-    if (this.peekCache && this.peekCache.id === id && this.peekCache.width === width) {
-      return this.peekCache.lines;
-    }
     const markdown = entryToMarkdown(node.entry) || entryHeadline(node.entry);
-    let lines: string[];
-    try {
-      lines = new Markdown(markdown, 1, 0, getMarkdownTheme()).render(width);
-    } catch {
-      lines = markdown.split("\n");
-    }
-    this.peekCache = { id, width, lines };
-    return lines;
+    return this.peekCache.lines(node.entry.id, markdown, width);
   }
 
   private scrollPeek(delta: number): void {
@@ -799,20 +749,18 @@ class SessionTreePicker {
     const listLines: string[] = [];
     if (this.peek && layout.split) {
       const left = this.renderEntryRows(layout.listWidth, entryRows);
-      const right = this.peekLines(layout.previewWidth);
+      const right = slicePreview(this.peekLines(layout.previewWidth), this.peekScroll, entryRows);
       const divider = theme.fg("border", "│");
       for (let i = 0; i < entryRows; i++) {
         listLines.push(
           padTo(left[i] ?? "", layout.listWidth) +
             divider +
-            truncateToWidth(right[this.peekScroll + i] ?? "", layout.previewWidth, ""),
+            truncateToWidth(right[i] ?? "", layout.previewWidth, ""),
         );
       }
     } else if (this.peek) {
-      const preview = this.peekLines(width);
-      for (let i = this.peekScroll; i < Math.min(this.peekScroll + entryRows, preview.length); i++) {
-        listLines.push(truncateToWidth(preview[i] ?? "", width, ""));
-      }
+      const preview = slicePreview(this.peekLines(width), this.peekScroll, entryRows);
+      for (const line of preview) listLines.push(truncateToWidth(line, width, ""));
     } else if (this.visible.length === 0) {
       listLines.push(theme.fg("muted", "  No entries"));
     } else {
@@ -824,15 +772,17 @@ class SessionTreePicker {
     const filterSuffix = this.filterMode === "default" ? "" : ` [${FILTER_LABELS[this.filterMode]}]`;
     const pos = this.visible.length ? `  (${this.cursor + 1}/${this.visible.length})${filterSuffix}` : "  (0/0)";
     if (this.peek) {
-      const total = this.peekLines(layout.previewWidth).length;
-      const from = total === 0 ? 0 : this.peekScroll + 1;
-      const to = Math.min(this.peekScroll + entryRows, total);
+      const range = lineRangeLabel(
+        this.peekLines(layout.previewWidth).length,
+        this.peekScroll,
+        entryRows,
+      );
       const sel = this.selected.size ? ` · ${this.selected.size} selected` : "";
       const hint = this.peekFocus
-        ? " · ↑↓ scroll · esc back · ctrl+w save"
-        : " · enter view · esc close peek · ctrl+w save";
+        ? " · tab select · ↑↓ scroll · esc back · ctrl+w save"
+        : " · tab select · enter view · esc close peek · ctrl+w save";
       lines.push(
-        truncateToWidth(theme.fg("muted", `  lines ${from}-${to}/${total}${sel}`) + theme.fg("accent", hint), width),
+        truncateToWidth(theme.fg("muted", `  ${range}${sel}`) + theme.fg("accent", hint), width),
       );
     } else if (this.status) {
       lines.push(truncateToWidth(theme.fg("muted", pos) + theme.fg("accent", ` · ${this.status}`), width));
@@ -883,13 +833,6 @@ class SessionTreePicker {
     if (isCursor) line = theme.bg("selectedBg", line);
     return line;
   }
-}
-
-/** Pad a (possibly ANSI-styled) line to exactly `width` visible columns. */
-function padTo(line: string, width: number): string {
-  const current = visibleWidth(line);
-  if (current >= width) return truncateToWidth(line, width, "");
-  return line + " ".repeat(width - current);
 }
 
 function formatLabelTime(value: string): string {

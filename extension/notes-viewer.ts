@@ -20,64 +20,35 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, copyToClipboard, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Key,
-  Markdown,
   matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import {
+  MarkdownCache,
+  formatAge,
+  lineRangeLabel,
+  notesRoot,
+  padTo,
+  sanitizeStem,
+  shellQuote,
+  shortenPath,
+  sleepSync,
+  slicePreview,
+  projectDirName,
+} from "./notes-shared/shared.ts";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Notes tree
 // ---------------------------------------------------------------------------
-
-/** `/home/denis/llm` -> `--home-denis-llm--` (pi's session dir convention). */
-function projectDirName(cwd: string): string {
-  const stripped = cwd.replace(/^\/+/, "").replace(/\/+$/, "");
-  return `--${stripped.replace(/\//g, "-")}--`;
-}
-
-function sanitizeStem(title: string): string {
-  let out = "";
-  for (const ch of title) {
-    if (/[A-Za-z0-9\-_. ]/.test(ch)) out += ch;
-    else out += "_";
-  }
-  const trimmed = out.trim().replace(/\.+$/, "").replace(/ /g, "_");
-  return trimmed.length > 0 ? trimmed : "note";
-}
-
-function notesRoot(): string {
-  return path.join(getAgentDir(), "notes");
-}
-
-function shorten(p: string): string {
-  const home = os.homedir();
-  return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-}
-
-function formatAge(mtimeMs: number): string {
-  if (!mtimeMs) return "";
-  const diff = Date.now() - mtimeMs;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  if (days < 30) return `${Math.floor(days / 7)}w`;
-  if (days < 365) return `${Math.floor(days / 30)}mo`;
-  return `${Math.floor(days / 365)}y`;
-}
 
 interface NoteNode {
   name: string;
@@ -140,23 +111,6 @@ function countFiles(nodes: NoteNode[]): number {
   return n;
 }
 
-/** Pad a (possibly ANSI-styled) line to exactly `width` visible columns. */
-function padTo(line: string, width: number): string {
-  const current = visibleWidth(line);
-  if (current >= width) return truncateToWidth(line, width, "");
-  return line + " ".repeat(width - current);
-}
-
-/** POSIX single-quote escaping for a path passed to a shell. */
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-/** Synchronously sleep (Node allows Atomics.wait on the main thread). */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 // ---------------------------------------------------------------------------
 // Viewer component
 // ---------------------------------------------------------------------------
@@ -204,7 +158,7 @@ class NotesViewer {
   private status: StatusMessage | undefined;
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
 
-  private mdCache?: { path: string; width: number; lines: string[] };
+  private readonly mdCache = new MarkdownCache();
 
   private cachedWidth?: number;
   private cachedLines?: string[];
@@ -256,7 +210,7 @@ class NotesViewer {
 
   private reload(): void {
     this.contentCache.clear();
-    this.mdCache = undefined;
+    this.mdCache.clear();
     this.content = "";
     this.roots = scanNotes(notesRoot());
     this.parentPath.clear();
@@ -362,7 +316,7 @@ class NotesViewer {
     }
     this.selectedPath = node.path;
     this.previewScroll = 0;
-    this.mdCache = undefined;
+    this.mdCache.clear();
   }
 
   private focusFirstFile(): void {
@@ -550,7 +504,7 @@ class NotesViewer {
     if (this.selectedPath === target) {
       this.selectedPath = undefined;
       this.content = "";
-      this.mdCache = undefined;
+      this.mdCache.clear();
     }
     this.contentCache.delete(target);
     this.cursor = Math.max(0, this.cursor - 1);
@@ -615,7 +569,7 @@ class NotesViewer {
   private refreshSelected(): void {
     const node = this.current()?.node;
     if (!node || node.isDir) return;
-    this.mdCache = undefined;
+    this.mdCache.clear();
     this.content = "";
     this.selectedPath = undefined;
     this.loadFile(node);
@@ -718,7 +672,8 @@ class NotesViewer {
           this.loadFile(node);
           this.previewScroll = 0;
           this.focus = "content";
-          this.setStatus(`Viewing ${path.basename(node.path)} — ↑↓ scroll · esc back`);
+          this.invalidate();
+          this.tui.requestRender();
         }
         return;
       }
@@ -811,8 +766,19 @@ class NotesViewer {
       lines.push(truncateToWidth(theme.fg(color, `  ${this.status.text}`), width));
     } else {
       const pos = this.visible.length ? `  (${this.cursor + 1}/${this.visible.length})` : "  (0/0)";
+      const hasNote = !!(this.selectedPath && this.content);
       const name = this.selectedPath ? ` · ${path.basename(this.selectedPath)}` : "";
-      lines.push(truncateToWidth(theme.fg("muted", pos + name), width));
+      if (hasNote) {
+        const range = lineRangeLabel(
+          this.mdLines(this.layout().previewWidth).length,
+          this.previewScroll,
+          rows,
+        );
+        const hint = this.focus === "content" ? " · ↑↓ scroll · esc back" : " · enter view";
+        lines.push(truncateToWidth(theme.fg("muted", `  ${range}${name}`) + theme.fg("accent", hint), width));
+      } else {
+        lines.push(truncateToWidth(theme.fg("muted", pos), width));
+      }
     }
 
     lines.push("");
@@ -830,7 +796,7 @@ class NotesViewer {
       const root = notesRoot();
       const message = fs.existsSync(root)
         ? "  No notes match. Save one with /note."
-        : `  No notes yet at ${shorten(root)}.`;
+        : `  No notes yet at ${shortenPath(root)}.`;
       out.push(theme.fg("muted", truncateToWidth(message, width, "…")));
       return out;
     }
@@ -872,34 +838,16 @@ class NotesViewer {
 
   private mdLines(width: number): string[] {
     if (!this.content) return [this.theme.fg("muted", "No note selected.")];
-    if (this.mdCache && this.mdCache.path === this.selectedPath && this.mdCache.width === width) {
-      return this.mdCache.lines;
-    }
-    let lines: string[];
-    try {
-      const md = new Markdown(this.content, 1, 0, getMarkdownTheme());
-      lines = md.render(width);
-    } catch {
-      lines = this.content.split("\n");
-    }
-    this.mdCache = { path: this.selectedPath ?? "", width, lines };
-    return lines;
+    return this.mdCache.lines(this.selectedPath ?? "", this.content, width);
   }
 
   private renderPreview(width: number, height: number): string[] {
-    const theme = this.theme;
     const all = this.mdLines(width);
-    const out: string[] = [];
-    if (this.previewScroll > 0) {
-      out.push(theme.fg("dim", `  ↑ ${this.previewScroll} more line(s) above`));
-    }
-    for (let i = this.previewScroll; i < Math.min(this.previewScroll + height, all.length); i++) {
-      out.push(truncateToWidth(all[i] ?? "", width, ""));
-    }
-    const below = all.length - (this.previewScroll + height);
-    if (below > 0) out.push(theme.fg("dim", `  ↓ ${below} more line(s) below`));
+    const out = slicePreview(all, this.previewScroll, height).map((line) =>
+      truncateToWidth(line, width, ""),
+    );
     while (out.length < height) out.push("");
-    return out.slice(0, height);
+    return out;
   }
 
   private scrollPreview(delta: number): void {

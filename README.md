@@ -91,6 +91,7 @@ install -m755 target/release/pi-session-inspector ~/.local/bin/pi-session-inspec
 mkdir -p ~/.pi/agent/extensions
 cp extension/notes.ts extension/session-notes.ts extension/notes-viewer.ts \
   ~/.pi/agent/extensions/
+cp -r extension/notes-shared ~/.pi/agent/extensions/notes-shared
 # then run /reload inside pi
 ```
 
@@ -198,8 +199,14 @@ Install both next to the GUI extension and reload pi:
 
 ```bash
 cp extension/session-notes.ts extension/notes-viewer.ts ~/.pi/agent/extensions/
+cp -r extension/notes-shared ~/.pi/agent/extensions/notes-shared
 # then run /reload inside pi
 ```
+
+The two extensions share small note-storage, formatting and Markdown-preview
+helpers (`notes-shared/shared.ts`, in a subdirectory so pi does not load it as
+an extension). Both use the same preview "peek" view; while peeking / viewing
+content, the footer shows the current position as `lines 1-18/60`.
 
 ## Project layout
 
@@ -209,7 +216,9 @@ pi-notes/
 ├── extension/
 │   ├── notes.ts                      # pi extension registering /notes (GUI) and /report (HTML)
 │   ├── session-notes.ts              # /note: save session entries as Markdown notes
-│   └── notes-viewer.ts               # /notes-view: browse/view/rename/delete/edit stored notes
+│   ├── notes-viewer.ts               # /notes-view: browse/view/rename/delete/edit stored notes
+│   └── notes-shared/
+│       └── shared.ts                 # shared storage, formatting and peek/Markdown helpers
 ├── pi-notes/                         # iced GUI
 │   ├── Cargo.toml
 │   └── src/
