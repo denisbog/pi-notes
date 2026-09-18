@@ -104,8 +104,19 @@ export function padTo(line: string, width: number): string {
   return line + " ".repeat(width - current);
 }
 
-/** POSIX single-quote escaping for a path passed to a shell. */
+/**
+ * Quote a path for a shell command string.
+ *
+ * herdr parses the `pane run` command string with the host shell: Bash on
+ * POSIX, cmd.exe on Windows. Windows backs the path with backslashes and
+ * cmd.exe only recognizes double quotes, so the quoting must differ per
+ * platform or the path (quotes and all) is passed to nvim literally and fails.
+ */
 export function shellQuote(value: string): string {
+  if (process.platform === "win32") {
+    // cmd.exe: double quotes; a doubled quote is the escape for a literal one.
+    return `"${value.replace(/"/g, '""')}"`;
+  }
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
